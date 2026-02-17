@@ -1,0 +1,5 @@
+{
+  "name": "Binance Futures Tracker",
+  "description": "Real-time tracking of Open Interest and Funding Rates for Binance Futures coins.",
+  "requestFramePermissions": []
+}
