@@ -1,6 +1,7 @@
 import { MarketDataPoint } from '../types';
 
-const API_BASE = (((import.meta as any).env || {}) as Record<string, unknown>).VITE_API_BASE as string || '';
+const API_BASE =
+  (((import.meta as any).env || {}) as Record<string, unknown>).VITE_API_BASE as string || '';
 
 async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -57,9 +58,21 @@ export const dbService = {
     });
   },
 
-  async getMarketData(symbol: string, limit = 100) {
-    return request<MarketDataPoint[]>(
-      `/api/market-data?symbol=${encodeURIComponent(symbol)}&limit=${limit}`
-    );
+  /**
+   * Fetch historical market data for a symbol.
+   *
+   * @param symbol  - Coin symbol
+   * @param limit   - Max number of records to return (default 100)
+   * @param before  - Optional Unix timestamp (ms). When provided, only returns
+   *                  records with timestamp < before, enabling pagination for
+   *                  pan-back lazy loading. Your API endpoint must support this
+   *                  query param: GET /api/market-data?symbol=&limit=&before=
+   */
+  async getMarketData(symbol: string, limit = 100, before?: number) {
+    let url = `/api/market-data?symbol=${encodeURIComponent(symbol)}&limit=${limit}`;
+    if (before !== undefined) {
+      url += `&before=${before}`;
+    }
+    return request<MarketDataPoint[]>(url);
   },
 };

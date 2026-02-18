@@ -11,6 +11,8 @@ dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+// ── Schema ───────────────────────────────────────────────────────────────────
+
 async function initSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS coins (
@@ -34,7 +36,61 @@ async function initSchema() {
 
 initSchema().catch(err => {
   console.error('Failed to initialize database schema', err);
+  process.exit(1); // no point running without a schema
 });
+
+// ── Shared helpers ───────────────────────────────────────────────────────────
+
+/** Map a DB row → frontend-friendly MarketDataPoint */
+function toPoint(r) {
+  return {
+    timestamp: Number(r.timestamp),
+    openInterest: parseFloat(r.open_interest),
+    fundingRate: parseFloat(r.funding_rate),
+    price: parseFloat(r.price),
+  };
+}
+
+/** Upsert a single MarketDataPoint into the DB */
+async function storePoint(symbol, point) {
+  await pool.query(
+    `INSERT INTO market_data(symbol, timestamp, open_interest, funding_rate, price)
+     VALUES($1,$2,$3,$4,$5)
+     ON CONFLICT (symbol, timestamp) DO NOTHING`,
+    [symbol, point.timestamp, point.openInterest, point.fundingRate, point.price]
+  );
+}
+
+// ── Binance helper ───────────────────────────────────────────────────────────
+
+const BINANCE_API = 'https://fapi.binance.com';
+
+async function fetchBinanceData(symbol) {
+  const encoded = encodeURIComponent(symbol);
+  const [priceRes, oiRes, fundRes] = await Promise.all([
+    fetch(`${BINANCE_API}/fapi/v1/ticker/price?symbol=${encoded}`),
+    fetch(`${BINANCE_API}/fapi/v1/openInterest?symbol=${encoded}`),
+    fetch(`${BINANCE_API}/fapi/v1/premiumIndex?symbol=${encoded}`),
+  ]);
+  if (!priceRes.ok || !oiRes.ok || !fundRes.ok) {
+    throw new Error(
+      `Binance request failed — price:${priceRes.status}, oi:${oiRes.status}, fund:${fundRes.status}`
+    );
+  }
+  const [priceData, oiData, fundData] = await Promise.all([
+    priceRes.json(),
+    oiRes.json(),
+    fundRes.json(),
+  ]);
+  return {
+    timestamp: Date.now(),
+    price: parseFloat(priceData.price),
+    openInterest: parseFloat(oiData.openInterest),
+    fundingRate: parseFloat(fundData.lastFundingRate),
+  };
+}
+
+// ── App ──────────────────────────────────────────────────────────────────────
 
 const app = express();
 app.use(cors());
@@ -54,11 +110,14 @@ app.get('/api/coins', async (req, res) => {
 
 app.post('/api/coins', async (req, res) => {
   const { symbol } = req.body;
-  if (!symbol) {
+  if (!symbol || typeof symbol !== 'string') {
     return res.status(400).json({ error: 'symbol is required' });
   }
   try {
-    await pool.query('INSERT INTO coins(symbol) VALUES($1) ON CONFLICT DO NOTHING', [symbol]);
+    await pool.query(
+      'INSERT INTO coins(symbol) VALUES($1) ON CONFLICT DO NOTHING',
+      [symbol.toUpperCase()]
+    );
     res.status(201).json({ symbol });
   } catch (err) {
     console.error(err);
@@ -85,12 +144,7 @@ app.post('/api/market-data', async (req, res) => {
     return res.status(400).json({ error: 'missing fields' });
   }
   try {
-    await pool.query(
-      `INSERT INTO market_data(symbol, timestamp, open_interest, funding_rate, price)
-       VALUES($1,$2,$3,$4,$5)
-       ON CONFLICT (symbol, timestamp) DO NOTHING`,
-      [symbol, timestamp, openInterest, fundingRate, price]
-    );
+    await storePoint(symbol, { timestamp, openInterest, fundingRate, price });
     res.status(201).json({ symbol, timestamp });
   } catch (err) {
     console.error(err);
@@ -105,102 +159,100 @@ app.post('/api/market-data/fetch', async (req, res) => {
   }
   try {
     const point = await fetchBinanceData(symbol);
-    if (!point) throw new Error('fetchBinanceData returned null');
-    await pool.query(
-      `INSERT INTO market_data(symbol, timestamp, open_interest, funding_rate, price)
-       VALUES($1,$2,$3,$4,$5)
-       ON CONFLICT (symbol, timestamp) DO NOTHING`,
-      [symbol, point.timestamp, point.openInterest, point.fundingRate, point.price]
-    );
+    await storePoint(symbol, point);
     res.json(point);
   } catch (err) {
     console.error('fetch endpoint error', err);
-    const message = err?.message ?? 'internal server error';
-    res.status(500).json({ error: message, stack: err?.stack });
+    res.status(500).json({ error: err?.message ?? 'internal server error' });
   }
 });
 
+/**
+ * GET /api/market-data?symbol=BTCUSDT&limit=100&before=<unix_ms>
+ *
+ * Returns up to `limit` points (max 500) in ascending timestamp order.
+ * When `before` is supplied, only rows with timestamp < before are returned —
+ * this is what powers the pan-back lazy-load in the frontend.
+ */
 app.get('/api/market-data', async (req, res) => {
   const symbol = req.query.symbol;
-  const limit = parseInt(String(req.query.limit)) || 100;
+  const limit = Math.min(parseInt(String(req.query.limit)) || 100, 500); // cap at 500
+  const before = req.query.before ? parseInt(String(req.query.before)) : null;
+
   if (!symbol || typeof symbol !== 'string') {
     return res.status(400).json({ error: 'symbol query param required' });
   }
+
   try {
-    const { rows } = await pool.query(
-      `SELECT timestamp, open_interest, funding_rate, price
-       FROM market_data
-       WHERE symbol = $1
-       ORDER BY timestamp ASC
-       LIMIT $2`,
-      [symbol, limit]
-    );
-    const typed = rows.map(r => ({
-      timestamp: Number(r.timestamp),
-      openInterest: parseFloat(r.open_interest),
-      fundingRate: parseFloat(r.funding_rate),
-      price: parseFloat(r.price),
-    }));
-    res.json(typed);
+    let rows;
+
+    if (before != null) {
+      // Paginating backwards: fetch the N rows immediately before `before`,
+      // using DESC so LIMIT cuts at the correct end, then flip to ASC for the client.
+      const result = await pool.query(
+        `SELECT timestamp, open_interest, funding_rate, price
+         FROM market_data
+         WHERE symbol = $1 AND timestamp < $2
+         ORDER BY timestamp DESC
+         LIMIT $3`,
+        [symbol, before, limit]
+      );
+      rows = result.rows.reverse(); // back to ascending order
+    } else {
+      // Default: most recent N rows, ascending
+      const result = await pool.query(
+        `SELECT timestamp, open_interest, funding_rate, price
+         FROM market_data
+         WHERE symbol = $1
+         ORDER BY timestamp DESC
+         LIMIT $2`,
+        [symbol, limit]
+      );
+      rows = result.rows.reverse();
+    }
+
+    res.json(rows.map(toPoint));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal server error' });
   }
 });
 
-// ── Binance helper ───────────────────────────────────────────────────────────
-
-const BINANCE_API = 'https://fapi.binance.com';
-
-async function fetchBinanceData(symbol) {
-  const encoded = encodeURIComponent(symbol);
-  const [priceRes, oiRes, fundRes] = await Promise.all([
-    fetch(`${BINANCE_API}/fapi/v1/ticker/price?symbol=${encoded}`),
-    fetch(`${BINANCE_API}/fapi/v1/openInterest?symbol=${encoded}`),
-    fetch(`${BINANCE_API}/fapi/v1/premiumIndex?symbol=${encoded}`),
-  ]);
-  if (!priceRes.ok || !oiRes.ok || !fundRes.ok) {
-    const details = `price:${priceRes.status}, oi:${oiRes.status}, fund:${fundRes.status}`;
-    throw new Error(`binance request failed (${details})`);
-  }
-  const [priceData, oiData, fundData] = await Promise.all([
-    priceRes.json(),
-    oiRes.json(),
-    fundRes.json(),
-  ]);
-  return {
-    timestamp: Date.now(),
-    price: parseFloat(priceData.price),
-    openInterest: parseFloat(oiData.openInterest),
-    fundingRate: parseFloat(fundData.lastFundingRate),
-  };
-}
-
 // ── Periodic fetch job ───────────────────────────────────────────────────────
+
+// How long to keep market data. 7 days is plenty for a chart tool.
+const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 async function runFetchCycle() {
   try {
     const { rows } = await pool.query('SELECT symbol FROM coins');
-    for (const row of rows) {
-      try {
-        const point = await fetchBinanceData(row.symbol);
-        await pool.query('INSERT INTO coins(symbol) VALUES($1) ON CONFLICT DO NOTHING', [row.symbol]);
-        await pool.query(
-          `INSERT INTO market_data(symbol, timestamp, open_interest, funding_rate, price)
-           VALUES($1,$2,$3,$4,$5)
-           ON CONFLICT (symbol, timestamp) DO NOTHING`,
-          [row.symbol, point.timestamp, point.openInterest, point.fundingRate, point.price]
-        );
-      } catch (e) {
-        console.error(`failed to fetch/store data for ${row.symbol}:`, e?.message ?? e);
-      }
+
+    await Promise.all(
+      rows.map(async ({ symbol }) => {
+        try {
+          const point = await fetchBinanceData(symbol);
+          await storePoint(symbol, point);
+        } catch (e) {
+          console.error(`Failed to fetch/store data for ${symbol}:`, e?.message ?? e);
+        }
+      })
+    );
+
+    // Prune data older than RETENTION_MS so the DB doesn't grow forever
+    const cutoff = Date.now() - RETENTION_MS;
+    const { rowCount } = await pool.query(
+      'DELETE FROM market_data WHERE timestamp < $1',
+      [cutoff]
+    );
+    if (rowCount > 0) {
+      console.log(`Pruned ${rowCount} old market_data rows`);
     }
   } catch (e) {
-    console.error('fetch cycle error', e?.message ?? e);
+    console.error('Fetch cycle error:', e?.message ?? e);
   }
 }
 
-// start 5 s after launch, then every 60 s
+// Start 5 s after launch, then every 60 s
 setTimeout(() => {
   runFetchCycle();
   setInterval(runFetchCycle, 60 * 1000);
@@ -210,5 +262,5 @@ setTimeout(() => {
 
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
-  console.log(`server listening on port ${port}`);
+  console.log(`Server listening on port ${port}`);
 });
