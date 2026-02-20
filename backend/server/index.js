@@ -96,6 +96,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ── Health ───────────────────────────────────────────────────────────────────
+
+app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
 // ── Coins ────────────────────────────────────────────────────────────────────
 
 app.get('/api/coins', async (req, res) => {
@@ -212,6 +216,36 @@ app.get('/api/market-data', async (req, res) => {
     }
 
     res.json(rows.map(toPoint));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal server error' });
+  }
+});
+
+app.get('/api/market-data/range', async (req, res) => {
+  const symbol = req.query.symbol;
+  const start = req.query.start ? parseInt(String(req.query.start)) : null;
+  const end = req.query.end ? parseInt(String(req.query.end)) : null;
+
+  if (!symbol || typeof symbol !== 'string') {
+    return res.status(400).json({ error: 'symbol query param required' });
+  }
+  if (start == null || end == null) {
+    return res.status(400).json({ error: 'start and end timestamps required' });
+  }
+  if (start >= end) {
+    return res.status(400).json({ error: 'start must be less than end' });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT timestamp, open_interest, funding_rate, price
+       FROM market_data
+       WHERE symbol = $1 AND timestamp >= $2 AND timestamp <= $3
+       ORDER BY timestamp ASC`,
+      [symbol, start, end]
+    );
+    res.json(result.rows.map(toPoint));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal server error' });

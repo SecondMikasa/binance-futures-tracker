@@ -16,11 +16,16 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
     return await res.json();
   } catch (e) {
     const text = await res.text();
-    throw new Error(`Failed to parse JSON from ${path}: ${e}. Response body: ${text}`);
+    throw new Error(`Failed to parse JSON from ${path}: ${e}. Body: ${text}`);
   }
 }
 
 export const dbService = {
+  /** Lightweight connectivity check — called once before any per-coin requests. */
+  async healthCheck(): Promise<void> {
+    await request<{ ok: boolean }>('/api/health');
+  },
+
   async addCoin(symbol: string) {
     return request('/api/coins', {
       method: 'POST',
@@ -58,21 +63,14 @@ export const dbService = {
     });
   },
 
-  /**
-   * Fetch historical market data for a symbol.
-   *
-   * @param symbol  - Coin symbol
-   * @param limit   - Max number of records to return (default 100)
-   * @param before  - Optional Unix timestamp (ms). When provided, only returns
-   *                  records with timestamp < before, enabling pagination for
-   *                  pan-back lazy loading. Your API endpoint must support this
-   *                  query param: GET /api/market-data?symbol=&limit=&before=
-   */
   async getMarketData(symbol: string, limit = 100, before?: number) {
     let url = `/api/market-data?symbol=${encodeURIComponent(symbol)}&limit=${limit}`;
-    if (before !== undefined) {
-      url += `&before=${before}`;
-    }
+    if (before !== undefined) url += `&before=${before}`;
+    return request<MarketDataPoint[]>(url);
+  },
+  
+  async getMarketDataRange(symbol: string, start: number, end: number) {
+    const url = `/api/market-data/range?symbol=${encodeURIComponent(symbol)}&start=${start}&end=${end}`;
     return request<MarketDataPoint[]>(url);
   },
 };

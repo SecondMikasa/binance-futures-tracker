@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   LayoutDashboard, Plus, Activity, Trash2,
-  Search, Database, ExternalLink, WifiOff, Wifi,
+  Search, Database, ExternalLink, WifiOff,
 } from 'lucide-react';
 import { CoinDetail } from './components/CoinDetail';
 import { AddCoinModal } from './components/AddCoinModal';
@@ -11,9 +11,7 @@ import { REFRESH_INTERVAL_MS } from './constants';
 
 // How many recent points to keep in memory per coin (1 point/min × 60 min × 2 = 2 hrs buffer)
 const MAX_POINTS_IN_MEMORY = 120;
-
-// Backoff config for when the backend is unreachable
-const BACKOFF_STEPS_MS = [5_000, 15_000, 30_000, 60_000]; // caps at 60 s
+const BACKOFF_STEPS_MS = [5_000, 15_000, 30_000, 60_000];
 
 const App: React.FC = () => {
   const [trackedCoins, setTrackedCoins] = useState<string[]>([]);
@@ -21,8 +19,6 @@ const App: React.FC = () => {
   const [marketData, setMarketData] = useState<Record<string, MarketDataPoint[]>>({});
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-
-  // Connection state
   const [isConnected, setIsConnected] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -30,12 +26,11 @@ const App: React.FC = () => {
   const backoffIndexRef = useRef(0);
   const trackedCoinsRef = useRef<string[]>([]);
 
-  // Keep ref in sync so the poll loop always sees current coins without re-creating the interval
   useEffect(() => {
     trackedCoinsRef.current = trackedCoins;
   }, [trackedCoins]);
 
-  // ── Initialise: load coins + recent history from the backend ───────────────
+  // ── Init ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
       try {
@@ -64,18 +59,23 @@ const App: React.FC = () => {
     init();
   }, []);
 
-  // ── Poll loop: frontend only READS the latest point for each coin ──────────
+  // ── Poll ──────────────────────────────────────────────────────────────────
   //
-  //  The backend's own setInterval already hits Binance every 60 s and stores
-  //  the result. We just ask "what's the newest row for this coin?" and merge
-  //  it into local state. No fetchAndStore, no Binance calls from the browser.
+  // Pattern: health-check FIRST with one cheap request.
+  // If it throws, the backend is unreachable — bail immediately with a single
+  // console.warn instead of N errors (one per tracked coin).
   //
   const poll = useCallback(async () => {
     const coins = trackedCoinsRef.current;
-    if (coins.length === 0) return;
 
     try {
-      // Fetch only the single most-recent point per coin (limit=1)
+      await dbService.healthCheck(); // ← single gate; throws if backend is down
+
+      if (coins.length === 0) {
+        intervalRef.current = setTimeout(poll, REFRESH_INTERVAL_MS);
+        return;
+      }
+
       const updates = await Promise.all(
         coins.map(async sym => {
           const points = await dbService.getMarketData(sym, 1);
@@ -88,7 +88,6 @@ const App: React.FC = () => {
         for (const { sym, point } of updates) {
           if (!point) continue;
           const existing = next[sym] ?? [];
-          // Only append if this timestamp is actually new
           const alreadyHave = existing.some(p => p.timestamp === point.timestamp);
           if (!alreadyHave) {
             next[sym] = [...existing, point]
@@ -101,15 +100,11 @@ const App: React.FC = () => {
 
       setIsConnected(true);
       setLastUpdated(new Date());
-      backoffIndexRef.current = 0; // reset backoff on success
-
-      // Schedule next poll at normal interval
+      backoffIndexRef.current = 0;
       intervalRef.current = setTimeout(poll, REFRESH_INTERVAL_MS);
-    } catch (err) {
-      console.error('Poll failed:', err);
-      setIsConnected(false);
 
-      // Exponential backoff — don't hammer a down server
+    } catch {
+      // One log line total, regardless of coin count
       const delay = BACKOFF_STEPS_MS[
         Math.min(backoffIndexRef.current, BACKOFF_STEPS_MS.length - 1)
       ];
@@ -117,27 +112,23 @@ const App: React.FC = () => {
         backoffIndexRef.current + 1,
         BACKOFF_STEPS_MS.length - 1
       );
-      console.warn(`Retrying in ${delay / 1000}s…`);
+      console.warn(`[poll] Backend unreachable — retrying in ${delay / 1000}s`);
+      setIsConnected(false);
       intervalRef.current = setTimeout(poll, delay);
     }
   }, []);
 
-  // Start polling once on mount
   useEffect(() => {
     intervalRef.current = setTimeout(poll, REFRESH_INTERVAL_MS);
-    return () => {
-      if (intervalRef.current) clearTimeout(intervalRef.current);
-    };
+    return () => { if (intervalRef.current) clearTimeout(intervalRef.current); };
   }, [poll]);
 
-  // ── Add / remove coins ────────────────────────────────────────────────────
+  // ── Add / remove ──────────────────────────────────────────────────────────
   const addCoin = async (symbol: string) => {
     if (trackedCoins.includes(symbol)) return;
     await dbService.addCoin(symbol);
     setTrackedCoins(prev => [...prev, symbol]);
     if (!selectedCoin) setSelectedCoin(symbol);
-
-    // Fetch whatever history the backend already has for this coin
     try {
       const history = await dbService.getMarketData(symbol, MAX_POINTS_IN_MEMORY);
       setMarketData(prev => ({ ...prev, [symbol]: history }));
@@ -151,11 +142,7 @@ const App: React.FC = () => {
     await dbService.removeCoin(symbol);
     const next = trackedCoins.filter(c => c !== symbol);
     setTrackedCoins(next);
-    setMarketData(prev => {
-      const n = { ...prev };
-      delete n[symbol];
-      return n;
-    });
+    setMarketData(prev => { const n = { ...prev }; delete n[symbol]; return n; });
     if (selectedCoin === symbol) setSelectedCoin(next[0] ?? null);
   };
 
@@ -163,7 +150,6 @@ const App: React.FC = () => {
   return (
     <div className="flex h-screen bg-slate-950 text-slate-200 overflow-hidden font-sans">
 
-      {/* Sidebar */}
       <aside className={`${isSidebarOpen ? 'w-64' : 'w-0'} flex-shrink-0 bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col overflow-hidden`}>
         <div className="p-4 border-b border-slate-800 flex items-center gap-2 whitespace-nowrap">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-500/20 flex-shrink-0">
@@ -212,7 +198,6 @@ const App: React.FC = () => {
               <button
                 onClick={e => removeCoin(symbol, e)}
                 className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 hover:text-red-400 rounded-md transition-all flex-shrink-0"
-                title="Remove coin"
               >
                 <Trash2 size={14} />
               </button>
@@ -221,10 +206,7 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main Content */}
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
-
-        {/* Header */}
         <header className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm flex items-center justify-between px-6 flex-shrink-0 z-10">
           <div className="flex items-center gap-4">
             <button
@@ -251,8 +233,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Connection status pill */}
-          <div className="flex items-center gap-3">
+          <div>
             {isConnected ? (
               <div className="px-3 py-1 bg-slate-800 rounded-full border border-slate-700 text-xs text-slate-400 flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
@@ -269,7 +250,6 @@ const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-950">
           {selectedCoin ? (
             marketData[selectedCoin]?.length > 0 ? (
@@ -278,11 +258,9 @@ const App: React.FC = () => {
               <div className="h-full flex flex-col items-center justify-center text-slate-500 space-y-4">
                 {isConnected ? (
                   <>
-                    <div className="animate-spin text-blue-500">
-                      <Activity size={32} />
-                    </div>
+                    <div className="animate-spin text-blue-500"><Activity size={32} /></div>
                     <p>Waiting for first data point for {selectedCoin}…</p>
-                    <p className="text-xs text-slate-600">Backend fetches every 60 s</p>
+                    <p className="text-xs text-slate-600">Backend fetches Binance every 60 seconds</p>
                   </>
                 ) : (
                   <>
