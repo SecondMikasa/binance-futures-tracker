@@ -1,0 +1,24 @@
+{
+  "name": "binance-futures-tracker",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"cd backend && node server/index.js\" \"cd frontend && npm run dev\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SecondMikasa/binance-futures-tracker.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/SecondMikasa/binance-futures-tracker/issues"
+  },
+  "homepage": "https://github.com/SecondMikasa/binance-futures-tracker#readme",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
