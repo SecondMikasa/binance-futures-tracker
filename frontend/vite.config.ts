@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
         proxy: {
           // forward API requests to backend during development
           '/api': {
-            target: 'http://localhost:4000',
+            target: env.API_TARGET,
             changeOrigin: true,
             secure: false,
           }
