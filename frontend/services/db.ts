@@ -68,9 +68,23 @@ export const dbService = {
     if (before !== undefined) url += `&before=${before}`;
     return request<MarketDataPoint[]>(url);
   },
-  
+
   async getMarketDataRange(symbol: string, start: number, end: number) {
     const url = `/api/market-data/range?symbol=${encodeURIComponent(symbol)}&start=${start}&end=${end}`;
     return request<MarketDataPoint[]>(url);
+  },
+
+  /**
+   * Fetches the most-recent data point for ALL given symbols in a single
+   * HTTP request → single DB query (DISTINCT ON).
+   *
+   * Replaces the old poll pattern of N parallel getMarketData(sym, 1) calls.
+   * Each item in the returned array includes a `symbol` field alongside the
+   * standard MarketDataPoint fields.
+   */
+  async getLatestBatch(symbols: string[]): Promise<(MarketDataPoint & { symbol: string })[]> {
+    if (symbols.length === 0) return [];
+    const url = `/api/market-data/latest-batch?symbols=${symbols.map(encodeURIComponent).join(',')}`;
+    return request<(MarketDataPoint & { symbol: string })[]>(url);
   },
 };

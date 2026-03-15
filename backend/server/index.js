@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import pg from 'pg';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
@@ -51,6 +52,17 @@ function toPoint(r) {
   };
 }
 
+/* Map a DB row */
+function toPointWithSymbol(r) {
+  return {
+    symbol: r.symbol,
+    timestamp: Number(r.timestamp),
+    openInterest: parseFloat(r.open_interest),
+    fundingRate: parseFloat(r.funding_rate),
+    price: parseFloat(r.price),
+  };
+}
+
 /** Upsert a single MarketDataPoint into the DB */
 async function storePoint(symbol, point) {
   await pool.query(
@@ -94,6 +106,10 @@ async function fetchBinanceData(symbol) {
 
 const app = express();
 app.use(cors());
+
+// Gzip all JSON responses
+app.use(compression());
+
 app.use(express.json());
 
 // ── Health ───────────────────────────────────────────────────────────────────
@@ -168,6 +184,40 @@ app.post('/api/market-data/fetch', async (req, res) => {
   } catch (err) {
     console.error('fetch endpoint error', err);
     res.status(500).json({ error: err?.message ?? 'internal server error' });
+  }
+});
+
+/**
+ * GET /api/market-data/latest-batch?symbols=BTCUSDT,ETHUSDT,...
+ *
+ * Returns the single most-recent data point for EACH requested symbol,
+ * all in ONE database round-trip using DISTINCT ON.
+ *
+ * This replaces the old pattern of the frontend firing N parallel
+ * GET /api/market-data?symbol=X&limit=1 calls every poll cycle —
+ * collapsing N HTTP requests + N DB queries into exactly 1 of each.
+ */
+app.get('/api/market-data/latest-batch', async (req, res) => {
+  const raw = req.query.symbols;
+  if (!raw || typeof raw !== 'string') {
+    return res.status(400).json({ error: 'symbols query param required' });
+  }
+  const symbols = raw.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
+  if (symbols.length === 0) return res.json([]);
+
+  try {
+    const result = await pool.query(
+      `SELECT DISTINCT ON (symbol)
+         symbol, timestamp, open_interest, funding_rate, price
+       FROM market_data
+       WHERE symbol = ANY($1)
+       ORDER BY symbol, timestamp DESC`,
+      [symbols]
+    );
+    res.json(result.rows.map(toPointWithSymbol));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal server error' });
   }
 });
 

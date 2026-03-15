@@ -71,6 +71,10 @@ const App: React.FC = () => {
   const backoffIndexRef = useRef(0);
   const trackedCoinsRef = useRef<string[]>([]);
 
+  // Tracks which coins have already had their full history loaded from the DB.
+  // Coins not in this set get loaded lazily when first selected.
+  const loadedCoinsRef = useRef<Set<string>>(new Set());
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -128,19 +132,31 @@ const App: React.FC = () => {
     }
   }, [trackedCoins, groups]);
 
+  // ── Init: lazy startup — only load the first coin's history ─────────────────
   useEffect(() => {
     const init = async () => {
       try {
         const storedCoins = await dbService.getCoins();
         const symbols = storedCoins.map(c => c.symbol);
         setTrackedCoins(symbols);
-        if (symbols.length > 0) setSelectedCoin(symbols[0]);
-        const history: Record<string, MarketDataPoint[]> = {};
-        await Promise.all(symbols.map(async sym => {
-          try { history[sym] = await dbService.getMarketData(sym, MAX_POINTS_IN_MEMORY); }
-          catch { history[sym] = []; }
-        }));
-        setMarketData(history);
+
+        // Seed all coins with empty arrays immediately so the UI can render
+        const emptyHistory: Record<string, MarketDataPoint[]> = {};
+        symbols.forEach(sym => { emptyHistory[sym] = []; });
+        setMarketData(emptyHistory);
+
+        // Only eagerly fetch history for the first (selected) coin —
+        // all others will be lazy-loaded when the user clicks on them
+        if (symbols.length > 0) {
+          const first = symbols[0];
+          setSelectedCoin(first);
+          try {
+            const history = await dbService.getMarketData(first, MAX_POINTS_IN_MEMORY);
+            setMarketData(prev => ({ ...prev, [first]: history }));
+            loadedCoinsRef.current.add(first);
+          } catch { /* leave as [] — poll will fill it in */ }
+        }
+
         setIsConnected(true);
       } catch (err) {
         console.error('Failed to initialise:', err);
@@ -150,26 +166,44 @@ const App: React.FC = () => {
     init();
   }, []);
 
+  // ── Lazy-load history when user selects a coin for the first time ───────────
+  useEffect(() => {
+    if (!selectedCoin || loadedCoinsRef.current.has(selectedCoin)) return;
+    // Mark immediately to prevent a double-fetch if the effect fires twice
+    loadedCoinsRef.current.add(selectedCoin);
+    dbService.getMarketData(selectedCoin, MAX_POINTS_IN_MEMORY)
+      .then(history => setMarketData(prev => ({ ...prev, [selectedCoin]: history })))
+      .catch(() => { /* leave as [] */ });
+  }, [selectedCoin]);
+
+  // ── Poll: N+1 requests → 1 request via latest-batch ─────────────────────────
   const poll = useCallback(async () => {
     const coins = trackedCoinsRef.current;
     try {
-      await dbService.healthCheck();
-      if (coins.length === 0) { intervalRef.current = setTimeout(poll, REFRESH_INTERVAL_MS); return; }
-      const updates = await Promise.all(coins.map(async sym => {
-        const points = await dbService.getMarketData(sym, 1);
-        return { sym, point: points[0] ?? null };
-      }));
+      if (coins.length === 0) {
+        // Nothing to poll — still do a health check so the status indicator works
+        await dbService.healthCheck();
+        intervalRef.current = setTimeout(poll, REFRESH_INTERVAL_MS);
+        return;
+      }
+
+      // Single HTTP request, single DB query (DISTINCT ON) for ALL coins
+      const latestPoints = await dbService.getLatestBatch(coins);
+
       setMarketData(prev => {
         const next = { ...prev };
-        for (const { sym, point } of updates) {
-          if (!point) continue;
+        for (const point of latestPoints) {
+          const sym = point.symbol;
           const existing = next[sym] ?? [];
           if (!existing.some(p => p.timestamp === point.timestamp)) {
-            next[sym] = [...existing, point].sort((a, b) => a.timestamp - b.timestamp).slice(-MAX_POINTS_IN_MEMORY);
+            next[sym] = [...existing, point]
+              .sort((a, b) => a.timestamp - b.timestamp)
+              .slice(-MAX_POINTS_IN_MEMORY);
           }
         }
         return next;
       });
+
       setIsConnected(true);
       setLastUpdated(new Date());
       backoffIndexRef.current = 0;
@@ -193,11 +227,14 @@ const App: React.FC = () => {
     setTrackedCoins(prev => [...prev, symbol]);
     if (!selectedCoin) setSelectedCoin(symbol);
     setGroups(prev => prev.map(g =>
-      g.id === DEFAULT_GROUP_ID ? { ...g, coinSymbols: [...g.coinSymbols, symbol] } : g
+      g.id === DEFAULT_GROUP_ID
+        ? { ...g, coinSymbols: [...g.coinSymbols, symbol] } : g
     ));
+    // Fetch and cache history for the newly added coin right away
     try {
       const history = await dbService.getMarketData(symbol, MAX_POINTS_IN_MEMORY);
       setMarketData(prev => ({ ...prev, [symbol]: history }));
+      loadedCoinsRef.current.add(symbol);
     } catch {
       setMarketData(prev => ({ ...prev, [symbol]: [] }));
     }
@@ -209,6 +246,7 @@ const App: React.FC = () => {
     const next = trackedCoins.filter(c => c !== symbol);
     setTrackedCoins(next);
     setMarketData(prev => { const n = { ...prev }; delete n[symbol]; return n; });
+    loadedCoinsRef.current.delete(symbol);
     if (selectedCoin === symbol) setSelectedCoin(next[0] ?? null);
     setGroups(prev => prev.map(g => ({ ...g, coinSymbols: g.coinSymbols.filter(c => c !== symbol) })));
   };
@@ -369,7 +407,6 @@ const App: React.FC = () => {
   const DroppableGroup: React.FC<DroppableGroupProps> = ({ group }) => {
     const { setNodeRef, isOver } = useDroppable({ id: group.id });
     const isCollapsed = collapsedGroups.has(group.id);
-    const isDefault = group.id === DEFAULT_GROUP_ID;
 
     return (
       <div className="mb-1">
