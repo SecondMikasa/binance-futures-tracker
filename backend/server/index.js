@@ -5,12 +5,33 @@ import pg from 'pg';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { setDefaultResultOrder } from 'dns';
+
+// Force Node.js to prefer IPv4 when resolving hostnames.
+// Without this, Node's fetch tries IPv6 first which fails on many local networks.
+setDefaultResultOrder('ipv4first');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+if (!process.env.DATABASE_URL) {
+  console.error(
+    'DATABASE_URL is not set.\n' +
+    ' • Local dev: create backend/.env.local with DATABASE_URL=postgres://...\n' +
+    ' • Deployed:  set DATABASE_URL as an environment variable in your platform dashboard.'
+  );
+  process.exit(1);
+}
 
 const { Pool } = pg;
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+  connectionTimeoutMillis: 10_000,
+  idleTimeoutMillis: 30_000,
+});
 
 // ── Schema ───────────────────────────────────────────────────────────────────
 
@@ -33,12 +54,8 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_market_symbol_timestamp ON market_data(symbol, timestamp);
     CREATE UNIQUE INDEX IF NOT EXISTS uq_market_symbol_timestamp ON market_data(symbol, timestamp);
   `);
+  console.log('Database schema ready.');
 }
-
-initSchema().catch(err => {
-  console.error('Failed to initialize database schema', err);
-  process.exit(1); // no point running without a schema
-});
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -106,10 +123,7 @@ async function fetchBinanceData(symbol) {
 
 const app = express();
 app.use(cors());
-
-// Gzip all JSON responses
-app.use(compression());
-
+app.use(compression()); // Gzip all JSON responses — cuts payload size ~70-80%
 app.use(express.json());
 
 // ── Health ───────────────────────────────────────────────────────────────────
@@ -190,12 +204,8 @@ app.post('/api/market-data/fetch', async (req, res) => {
 /**
  * GET /api/market-data/latest-batch?symbols=BTCUSDT,ETHUSDT,...
  *
- * Returns the single most-recent data point for EACH requested symbol,
- * all in ONE database round-trip using DISTINCT ON.
- *
- * This replaces the old pattern of the frontend firing N parallel
- * GET /api/market-data?symbol=X&limit=1 calls every poll cycle —
- * collapsing N HTTP requests + N DB queries into exactly 1 of each.
+ * Returns the single most-recent data point for EACH requested symbol
+ * in ONE database round-trip using DISTINCT ON.
  */
 app.get('/api/market-data/latest-batch', async (req, res) => {
   const raw = req.query.symbols;
@@ -336,15 +346,22 @@ async function runFetchCycle() {
   }
 }
 
-// Start 5 s after launch, then every 60 s
-setTimeout(() => {
-  runFetchCycle();
-  setInterval(runFetchCycle, 60 * 1000);
-}, 5 * 1000);
+// ── Start server AFTER confirming DB is reachable ────────────────────────────
 
-// ── Start ────────────────────────────────────────────────────────────────────
+initSchema()
+  .then(() => {
+    // Start 5s after launch, then every 60s
+    setTimeout(() => {
+      runFetchCycle();
+      setInterval(runFetchCycle, 60 * 1000);
+    }, 5 * 1000);
 
-const port = process.env.PORT || 4000;
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
-});
+    const port = process.env.PORT || 4000;
+    app.listen(port, () => {
+      console.log(`Server listening on port ${port}`);
+    });
+  })
+  .catch(err => {
+    console.error('Failed to initialize database schema — server will NOT start.', err.message ?? err);
+    process.exit(1);
+  });
