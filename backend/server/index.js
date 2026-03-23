@@ -6,9 +6,9 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { setDefaultResultOrder } from 'dns';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 
 // Force Node.js to prefer IPv4 when resolving hostnames.
+// Without this, Node's fetch tries IPv6 first which fails on many local networks.
 setDefaultResultOrder('ipv4first');
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,45 +25,10 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
-// ── Proxy rotation ───────────────────────────────────────────────────────────
-
-// Format from Webshare: host:port:user:pass
-const RAW_PROXIES = [
-  '31.59.20.176:6754:ichvsliv:s1dat7zt5etk',
-  '23.95.150.145:6114:ichvsliv:s1dat7zt5etk',
-  '198.23.239.134:6540:ichvsliv:s1dat7zt5etk',
-  '45.38.107.97:6014:ichvsliv:s1dat7zt5etk',
-  '107.172.163.27:6543:ichvsliv:s1dat7zt5etk',
-  '198.105.121.200:6462:ichvsliv:s1dat7zt5etk',
-  '216.10.27.159:6837:ichvsliv:s1dat7zt5etk',
-  '142.111.67.146:5611:ichvsliv:s1dat7zt5etk',
-  '191.96.254.138:6185:ichvsliv:s1dat7zt5etk',
-  '31.58.9.4:6077:ichvsliv:s1dat7zt5etk',
-];
-
-const PROXY_AGENTS = RAW_PROXIES.map(raw => {
-  const [host, port, user, pass] = raw.split(':');
-  const url = `http://${user}:${pass}@${host}:${port}`;
-  return new HttpsProxyAgent(url);
-});
-
-let proxyIndex = 0;
-
-function getNextProxy() {
-  const agent = PROXY_AGENTS[proxyIndex];
-  proxyIndex = (proxyIndex + 1) % PROXY_AGENTS.length;
-  return agent;
-}
-
-console.log(`Loaded ${PROXY_AGENTS.length} proxies for rotation.`);
-
-// ── Database ─────────────────────────────────────────────────────────────────
-
 const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
-  max: 3,
   connectionTimeoutMillis: 10_000,
   idleTimeoutMillis: 30_000,
 });
@@ -94,6 +59,7 @@ async function initSchema() {
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
+/** Map a DB row → frontend-friendly MarketDataPoint */
 function toPoint(r) {
   return {
     timestamp: Number(r.timestamp),
@@ -103,6 +69,7 @@ function toPoint(r) {
   };
 }
 
+/* Map a DB row */
 function toPointWithSymbol(r) {
   return {
     symbol: r.symbol,
@@ -113,6 +80,7 @@ function toPointWithSymbol(r) {
   };
 }
 
+/** Upsert a single MarketDataPoint into the DB */
 async function storePoint(symbol, point) {
   await pool.query(
     `INSERT INTO market_data(symbol, timestamp, open_interest, funding_rate, price)
@@ -122,57 +90,40 @@ async function storePoint(symbol, point) {
   );
 }
 
-// ── Binance helper with proxy rotation ───────────────────────────────────────
+// ── Binance helper ───────────────────────────────────────────────────────────
 
 const BINANCE_API = 'https://fapi.binance.com';
 
 async function fetchBinanceData(symbol) {
   const encoded = encodeURIComponent(symbol);
-
-  // Try each proxy up to 3 times before giving up
-  const maxAttempts = Math.min(3, PROXY_AGENTS.length);
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const agent = getNextProxy();
-
-    try {
-      const [priceRes, oiRes, fundRes] = await Promise.all([
-        fetch(`${BINANCE_API}/fapi/v1/ticker/price?symbol=${encoded}`, { agent }),
-        fetch(`${BINANCE_API}/fapi/v1/openInterest?symbol=${encoded}`, { agent }),
-        fetch(`${BINANCE_API}/fapi/v1/premiumIndex?symbol=${encoded}`, { agent }),
-      ]);
-
-      if (!priceRes.ok || !oiRes.ok || !fundRes.ok) {
-        const statuses = `price:${priceRes.status}, oi:${oiRes.status}, fund:${fundRes.status}`;
-        console.warn(`[${symbol}] Proxy attempt ${attempt + 1} failed (${statuses}), trying next proxy...`);
-        continue; // try next proxy
-      }
-
-      const [priceData, oiData, fundData] = await Promise.all([
-        priceRes.json(),
-        oiRes.json(),
-        fundRes.json(),
-      ]);
-
-      return {
-        timestamp: Date.now(),
-        price: parseFloat(priceData.price),
-        openInterest: parseFloat(oiData.openInterest),
-        fundingRate: parseFloat(fundData.lastFundingRate),
-      };
-    } catch (err) {
-      console.warn(`[${symbol}] Proxy attempt ${attempt + 1} error: ${err.message}, trying next proxy...`);
-    }
+  const [priceRes, oiRes, fundRes] = await Promise.all([
+    fetch(`${BINANCE_API}/fapi/v1/ticker/price?symbol=${encoded}`),
+    fetch(`${BINANCE_API}/fapi/v1/openInterest?symbol=${encoded}`),
+    fetch(`${BINANCE_API}/fapi/v1/premiumIndex?symbol=${encoded}`),
+  ]);
+  if (!priceRes.ok || !oiRes.ok || !fundRes.ok) {
+    throw new Error(
+      `Binance request failed — price:${priceRes.status}, oi:${oiRes.status}, fund:${fundRes.status}`
+    );
   }
-
-  throw new Error(`All proxy attempts failed for ${symbol}`);
+  const [priceData, oiData, fundData] = await Promise.all([
+    priceRes.json(),
+    oiRes.json(),
+    fundRes.json(),
+  ]);
+  return {
+    timestamp: Date.now(),
+    price: parseFloat(priceData.price),
+    openInterest: parseFloat(oiData.openInterest),
+    fundingRate: parseFloat(fundData.lastFundingRate),
+  };
 }
 
 // ── App ──────────────────────────────────────────────────────────────────────
 
 const app = express();
 app.use(cors());
-app.use(compression());
+app.use(compression()); // Gzip all JSON responses — cuts payload size ~70-80%
 app.use(express.json());
 
 // ── Health ───────────────────────────────────────────────────────────────────
@@ -250,6 +201,12 @@ app.post('/api/market-data/fetch', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/market-data/latest-batch?symbols=BTCUSDT,ETHUSDT,...
+ *
+ * Returns the single most-recent data point for EACH requested symbol
+ * in ONE database round-trip using DISTINCT ON.
+ */
 app.get('/api/market-data/latest-batch', async (req, res) => {
   const raw = req.query.symbols;
   if (!raw || typeof raw !== 'string') {
@@ -274,9 +231,16 @@ app.get('/api/market-data/latest-batch', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/market-data?symbol=BTCUSDT&limit=100&before=<unix_ms>
+ *
+ * Returns up to `limit` points (max 500) in ascending timestamp order.
+ * When `before` is supplied, only rows with timestamp < before are returned —
+ * this is what powers the pan-back lazy-load in the frontend.
+ */
 app.get('/api/market-data', async (req, res) => {
   const symbol = req.query.symbol;
-  const limit = Math.min(parseInt(String(req.query.limit)) || 100, 500);
+  const limit = Math.min(parseInt(String(req.query.limit)) || 100, 500); // cap at 500
   const before = req.query.before ? parseInt(String(req.query.before)) : null;
 
   if (!symbol || typeof symbol !== 'string') {
@@ -287,6 +251,8 @@ app.get('/api/market-data', async (req, res) => {
     let rows;
 
     if (before != null) {
+      // Paginating backwards: fetch the N rows immediately before `before`,
+      // using DESC so LIMIT cuts at the correct end, then flip to ASC for the client.
       const result = await pool.query(
         `SELECT timestamp, open_interest, funding_rate, price
          FROM market_data
@@ -295,8 +261,9 @@ app.get('/api/market-data', async (req, res) => {
          LIMIT $3`,
         [symbol, before, limit]
       );
-      rows = result.rows.reverse();
+      rows = result.rows.reverse(); // back to ascending order
     } else {
+      // Default: most recent N rows, ascending
       const result = await pool.query(
         `SELECT timestamp, open_interest, funding_rate, price
          FROM market_data
@@ -347,41 +314,43 @@ app.get('/api/market-data/range', async (req, res) => {
 
 // ── Periodic fetch job ───────────────────────────────────────────────────────
 
+// How long to keep market data. 7 days is plenty for a chart tool.
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 async function runFetchCycle() {
   try {
     const { rows } = await pool.query('SELECT symbol FROM coins');
-    console.log(`Fetch cycle started for ${rows.length} coins...`);
 
-    // Sequential to avoid connection/proxy burst
-    for (const { symbol } of rows) {
-      try {
-        const point = await fetchBinanceData(symbol);
-        await storePoint(symbol, point);
-        console.log(`✓ ${symbol} — price: ${point.price}`);
-      } catch (e) {
-        console.error(`Failed to fetch/store data for ${symbol}:`, e?.message ?? e);
-      }
-    }
+    await Promise.all(
+      rows.map(async ({ symbol }) => {
+        try {
+          const point = await fetchBinanceData(symbol);
+          await storePoint(symbol, point);
+        } catch (e) {
+          console.error(`Failed to fetch/store data for ${symbol}:`, e?.message ?? e);
+        }
+      })
+    );
 
+    // Prune data older than RETENTION_MS so the DB doesn't grow forever
     const cutoff = Date.now() - RETENTION_MS;
     const { rowCount } = await pool.query(
       'DELETE FROM market_data WHERE timestamp < $1',
       [cutoff]
     );
-    if (rowCount > 0) console.log(`Pruned ${rowCount} old market_data rows`);
-
-    console.log('Fetch cycle complete.');
+    if (rowCount > 0) {
+      console.log(`Pruned ${rowCount} old market_data rows`);
+    }
   } catch (e) {
     console.error('Fetch cycle error:', e?.message ?? e);
   }
 }
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// ── Start server AFTER confirming DB is reachable ────────────────────────────
 
 initSchema()
   .then(() => {
+    // Start 5s after launch, then every 60s
     setTimeout(() => {
       runFetchCycle();
       setInterval(runFetchCycle, 60 * 1000);
