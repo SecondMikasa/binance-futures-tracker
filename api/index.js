@@ -68,8 +68,64 @@ async function storePoint(symbol, point) {
   );
 }
 
+// ── Binance helpers ───────────────────────────────────────────────────────────
+
 const BINANCE_API = 'https://fapi.binance.com';
 
+/**
+ * Batch fetch for all symbols: 2 shared requests (prices + funding rates for
+ * every futures symbol at once) + N individual open-interest requests.
+ * Reduces total Binance API calls from N×3 → 2+N per cron cycle.
+ *
+ * Returns Map<SYMBOL, { timestamp, price, openInterest, fundingRate }>
+ */
+export async function fetchBinanceDataBatch(symbols) {
+  if (symbols.length === 0) return new Map();
+
+  const symbolSet = new Set(symbols.map(s => s.toUpperCase()));
+
+  // Two requests that cover ALL futures symbols at once
+  const [priceRes, fundRes] = await Promise.all([
+    fetch(`${BINANCE_API}/fapi/v1/ticker/price`),
+    fetch(`${BINANCE_API}/fapi/v1/premiumIndex`),
+  ]);
+  if (!priceRes.ok) throw new Error(`Binance price batch failed: ${priceRes.status}`);
+  if (!fundRes.ok)  throw new Error(`Binance funding batch failed: ${fundRes.status}`);
+
+  const [allPrices, allFunding] = await Promise.all([priceRes.json(), fundRes.json()]);
+
+  const priceMap   = new Map(allPrices.map(p  => [p.symbol, parseFloat(p.price)]));
+  const fundingMap = new Map(allFunding.map(f => [f.symbol, parseFloat(f.lastFundingRate)]));
+
+  // Open interest has no batch endpoint — still one request per symbol
+  const now = Date.now();
+  const oiResults = await Promise.allSettled(
+    symbols.map(symbol =>
+      fetch(`${BINANCE_API}/fapi/v1/openInterest?symbol=${encodeURIComponent(symbol)}`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`OI ${symbol}: ${r.status}`)))
+        .then(d => ({ symbol: symbol.toUpperCase(), openInterest: parseFloat(d.openInterest) }))
+    )
+  );
+
+  const result = new Map();
+  for (const outcome of oiResults) {
+    if (outcome.status === 'rejected') {
+      console.error('[fetchBatch] OI failed:', outcome.reason?.message ?? outcome.reason);
+      continue;
+    }
+    const { symbol, openInterest } = outcome.value;
+    if (!symbolSet.has(symbol)) continue;
+    result.set(symbol, {
+      timestamp: now,
+      price:        priceMap.get(symbol)   ?? 0,
+      fundingRate:  fundingMap.get(symbol) ?? 0,
+      openInterest,
+    });
+  }
+  return result;
+}
+
+// Single-symbol fetch — used only by the /api/market-data/fetch endpoint
 export async function fetchBinanceData(symbol) {
   const encoded = encodeURIComponent(symbol);
   const [priceRes, oiRes, fundRes] = await Promise.all([
@@ -86,21 +142,22 @@ export async function fetchBinanceData(symbol) {
     priceRes.json(), oiRes.json(), fundRes.json(),
   ]);
   return {
-    timestamp: Date.now(),
-    price: parseFloat(priceData.price),
+    timestamp:    Date.now(),
+    price:        parseFloat(priceData.price),
     openInterest: parseFloat(oiData.openInterest),
-    fundingRate: parseFloat(fundData.lastFundingRate),
+    fundingRate:  parseFloat(fundData.lastFundingRate),
   };
 }
 
 export { pool, storePoint };
+
+// ── Express app ───────────────────────────────────────────────────────────────
 
 const app = express();
 app.use(cors());
 app.use(compression());
 app.use(express.json());
 
-// Schema init middleware — runs once per cold start, then is a no-op
 app.use(async (_req, res, next) => {
   try {
     await ensureSchema();

@@ -1,10 +1,8 @@
-import { pool, fetchBinanceData } from './index.js';
+import { pool, fetchBinanceDataBatch } from './index.js';
 
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 export default async function handler(req, res) {
-  // Vercel automatically adds this header when CRON_SECRET env var is set.
-  // Blocks anyone from hitting /api/cron manually with a plain browser request.
   const auth = req.headers.authorization;
   if (process.env.CRON_SECRET && auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -12,40 +10,58 @@ export default async function handler(req, res) {
 
   try {
     const { rows } = await pool.query('SELECT symbol FROM coins');
-
-    const results = await Promise.allSettled(
-      rows.map(async ({ symbol }) => {
-        const point = await fetchBinanceData(symbol);
-        await pool.query(
-          `INSERT INTO market_data(symbol, timestamp, open_interest, funding_rate, price)
-           VALUES($1,$2,$3,$4,$5)
-           ON CONFLICT (symbol, timestamp) DO NOTHING`,
-          [symbol, point.timestamp, point.openInterest, point.fundingRate, point.price]
-        );
-        return symbol;
-      })
-    );
-
-    const succeeded = results.filter(r => r.status === 'fulfilled').map(r => r.value);
-    const failed = results
-      .filter(r => r.status === 'rejected')
-      .map((r, i) => ({ symbol: rows[i]?.symbol, reason: r.reason?.message }));
-
-    if (failed.length > 0) {
-      console.error('Cron fetch failures:', failed);
+    if (rows.length === 0) {
+      return res.json({ ok: true, message: 'no coins tracked' });
     }
 
-    // Prune data older than 7 days
-    const cutoff = Date.now() - RETENTION_MS;
-    const { rowCount } = await pool.query(
-      'DELETE FROM market_data WHERE timestamp < $1',
-      [cutoff]
-    );
-    if (rowCount > 0) console.log(`Pruned ${rowCount} old rows`);
+    const symbols = rows.map(r => r.symbol);
 
-    return res.json({ ok: true, updated: succeeded, failed });
+    // 2 + N Binance requests instead of N×3
+    const dataMap = await fetchBinanceDataBatch(symbols);
+
+    if (dataMap.size === 0) {
+      return res.status(500).json({ error: 'no data returned from Binance' });
+    }
+
+    // Single multi-row INSERT — one DB round-trip for all coins
+    const valueClauses = [];
+    const params = [];
+    let idx = 1;
+    for (const [symbol, point] of dataMap) {
+      valueClauses.push(`($${idx++},$${idx++},$${idx++},$${idx++},$${idx++})`);
+      params.push(symbol, point.timestamp, point.openInterest, point.fundingRate, point.price);
+    }
+
+    await pool.query(
+      `INSERT INTO market_data(symbol, timestamp, open_interest, funding_rate, price)
+       VALUES ${valueClauses.join(',')}
+       ON CONFLICT (symbol, timestamp) DO NOTHING`,
+      params
+    );
+
+    // Prune old rows only at the top of the hour.
+    // Vercel functions are stateless so we can't use an in-memory timestamp;
+    // checking the clock minute is a cheap stateless equivalent.
+    let pruned = 0;
+    if (new Date().getMinutes() === 0) {
+      const cutoff = Date.now() - RETENTION_MS;
+      const { rowCount } = await pool.query(
+        'DELETE FROM market_data WHERE timestamp < $1',
+        [cutoff]
+      );
+      pruned = rowCount ?? 0;
+      if (pruned > 0) console.log(`[cron] pruned ${pruned} old rows`);
+    }
+
+    // Report which symbols succeeded vs failed
+    const succeeded = [...dataMap.keys()];
+    const failed = symbols
+      .map(s => s.toUpperCase())
+      .filter(s => !dataMap.has(s));
+
+    return res.json({ ok: true, updated: succeeded, failed, pruned });
   } catch (err) {
-    console.error('Cron error:', err);
+    console.error('[cron] error:', err);
     return res.status(500).json({ error: err?.message ?? 'internal server error' });
   }
 }
