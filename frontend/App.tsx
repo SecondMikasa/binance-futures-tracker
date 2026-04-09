@@ -372,20 +372,20 @@ const App: React.FC = () => {
         ref={setNodeRef}
         style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 }}
         onClick={() => setSelectedCoin(symbol)}
-        className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${
+        className={`group flex items-center justify-between p-2 sm:p-3 rounded-lg cursor-pointer transition-colors ${
           selectedCoin === symbol
             ? 'bg-slate-800 text-white border border-slate-700'
             : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'
         }`}
       >
         <div className="flex items-center gap-2 flex-1 overflow-hidden">
-          <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-slate-600 hover:text-slate-400">
+          <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing text-slate-600 hover:text-slate-400 flex-shrink-0">
             <GripVertical size={14} />
           </div>
-          <div className="flex flex-col overflow-hidden">
-            <span className="font-medium text-sm truncate">{symbol}</span>
+          <div className="flex flex-col overflow-hidden min-w-0">
+            <span className="font-medium text-xs sm:text-sm truncate">{symbol}</span>
             {marketData[symbol]?.length > 0 && (
-              <span className={`text-xs ${marketData[symbol].at(-1)!.fundingRate > 0 ? 'text-green-500' : 'text-red-500'}`}>
+              <span className={`text-[10px] sm:text-xs ${marketData[symbol].at(-1)!.fundingRate > 0 ? 'text-green-500' : 'text-red-500'}`}>
                 FR: {(marketData[symbol].at(-1)!.fundingRate * 100).toFixed(4)}%
               </span>
             )}
@@ -424,8 +424,8 @@ const App: React.FC = () => {
             />
             <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: group.color }} />
             <span className="text-xs font-medium text-slate-400 truncate">{group.name}</span>
-            <span className="text-xs text-slate-600 flex-shrink-0">({group.coinSymbols.length})</span>
-            {isOver && <span className="text-xs text-slate-500 italic flex-shrink-0 ml-1">drop here</span>}
+            <span className="text-[10px] text-slate-600 flex-shrink-0">({group.coinSymbols.length})</span>
+            {isOver && <span className="text-[10px] text-slate-500 italic flex-shrink-0 ml-1 hidden sm:inline">drop here</span>}
           </div>
 
           <button
@@ -460,13 +460,20 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-200 overflow-hidden font-sans">
+      {/* Mobile overlay */}
+      {isSidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/50 z-20 lg:hidden"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
       >
-        <aside className={`${isSidebarOpen ? 'w-64' : 'w-0'} flex-shrink-0 bg-slate-900 border-r border-slate-800 transition-all duration-300 flex flex-col overflow-hidden`}>
+        <aside className={`${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 fixed lg:relative inset-y-0 left-0 w-72 lg:w-64 flex-shrink-0 bg-slate-900 border-r border-slate-800 transition-transform duration-300 ease-in-out z-30 flex flex-col overflow-hidden`}>
           <div className="p-4 border-b border-slate-800 flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-500/20 flex-shrink-0">
               <Activity size={18} strokeWidth={2.5} />
@@ -474,23 +481,23 @@ const App: React.FC = () => {
             <span className="font-bold text-lg tracking-tight">Binance Tracker</span>
           </div>
 
-          <div className="p-4 space-y-2">
+          <div className="p-3 sm:p-4 space-y-2">
             <button
               onClick={() => setIsModalOpen(true)}
-              className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-all"
+              className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-3 py-2.5 rounded-lg text-sm font-medium transition-all"
             >
-              <Plus size={16} /> Track New Coin
+              <Plus size={16} /> <span className="hidden sm:inline">Track New Coin</span><span className="sm:hidden">Add Coin</span>
             </button>
             <button
               onClick={() => { setEditingGroup(null); setIsGroupModalOpen(true); }}
-              className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+              className="w-full flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-sm font-medium transition-all"
             >
-              <FolderPlus size={16} /> New Group
+              <FolderPlus size={16} /> <span className="hidden sm:inline">New Group</span><span className="sm:hidden">Group</span>
             </button>
           </div>
 
           {trackedCoins.length > 0 && (
-            <div className="px-4 pb-3 space-y-2 border-b border-slate-800">
+            <div className="px-3 sm:px-4 pb-3 space-y-2 border-b border-slate-800">
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
@@ -565,19 +572,19 @@ const App: React.FC = () => {
       </DndContext>
 
       <main className="flex-1 flex flex-col h-full overflow-hidden relative">
-        <header className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm flex items-center justify-between px-6 flex-shrink-0 z-10">
-          <div className="flex items-center gap-4">
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors">
+        <header className="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm flex items-center justify-between px-4 lg:px-6 flex-shrink-0 z-10">
+          <div className="flex items-center gap-3 lg:gap-4">
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors lg:hidden">
               <LayoutDashboard size={20} />
             </button>
-            <div className="flex items-center gap-3">
-              <h2 className="text-xl font-semibold text-white">{selectedCoin ?? 'Dashboard'}</h2>
+            <div className="flex items-center gap-2 lg:gap-3 min-w-0">
+              <h2 className="text-lg lg:text-xl font-semibold text-white truncate">{selectedCoin ?? 'Dashboard'}</h2>
               {selectedCoin && (
                 <a
                   href={`https://www.binance.com/en/futures/${selectedCoin}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 px-3 py-1 bg-[#1E2026] hover:bg-[#2B2F36] text-[#FCD535] rounded-full border border-slate-700/50 transition-all text-xs font-medium group"
+                  className="hidden sm:flex items-center gap-1.5 px-3 py-1 bg-[#1E2026] hover:bg-[#2B2F36] text-[#FCD535] rounded-full border border-slate-700/50 transition-all text-xs font-medium group"
                 >
                   <span>Open Chart</span>
                   <ExternalLink size={12} className="opacity-70 group-hover:translate-x-0.5 transition-transform" />
@@ -587,19 +594,22 @@ const App: React.FC = () => {
           </div>
           <div>
             {isConnected ? (
-              <div className="px-3 py-1 bg-slate-800 rounded-full border border-slate-700 text-xs text-slate-400 flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                {lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}` : 'Live Sync'}
+              <div className="px-2 lg:px-3 py-1 bg-slate-800 rounded-full border border-slate-700 text-xs text-slate-400 flex items-center gap-1.5 lg:gap-2">
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
+                <span className="truncate hidden sm:inline">{lastUpdated ? `Updated ${lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}` : 'Live Sync'}</span>
+                <span className="sm:hidden">Live</span>
               </div>
             ) : (
-              <div className="px-3 py-1 bg-red-950/60 rounded-full border border-red-800/50 text-xs text-red-400 flex items-center gap-2">
-                <WifiOff size={12} /> Backend unreachable — retrying…
+              <div className="px-2 lg:px-3 py-1 bg-red-950/60 rounded-full border border-red-800/50 text-xs text-red-400 flex items-center gap-1.5 lg:gap-2">
+                <WifiOff size={12} className="flex-shrink-0" />
+                <span className="truncate hidden sm:inline">Backend unreachable — retrying…</span>
+                <span className="sm:hidden">Offline</span>
               </div>
             )}
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 bg-slate-950">
+        <div className="flex-1 overflow-y-auto p-3 lg:p-6 bg-slate-950">
           {selectedCoin ? (
             marketData[selectedCoin]?.length > 0 ? (
               <CoinDetail symbol={selectedCoin} data={marketData[selectedCoin]} />

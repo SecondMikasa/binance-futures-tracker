@@ -428,25 +428,25 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
       </div>
 
       {/* Metric Cards */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="bg-gray-900 rounded-xl p-3 border border-gray-800">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+        <div className="bg-gray-900 rounded-xl p-2 sm:p-3 border border-gray-800">
           <p className="text-xs text-gray-500 mb-1">Price</p>
-          <p className="text-base font-semibold font-mono text-white">
+          <p className="text-sm sm:text-base font-semibold font-mono text-white truncate">
             ${current.price.toLocaleString(undefined, { minimumFractionDigits: 2 })}
           </p>
           <p className={`text-xs flex items-center gap-0.5 mt-0.5 ${isPriceUp ? 'text-green-400' : 'text-red-400'}`}>
-            {isPriceUp ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+            {isPriceUp ? <TrendingUp size={10} /> : <TrendingDown size={10} />}
             {Math.abs(priceChange).toFixed(2)}
           </p>
         </div>
-        <div className="bg-gray-900 rounded-xl p-3 border border-gray-800">
+        <div className="bg-gray-900 rounded-xl p-2 sm:p-3 border border-gray-800">
           <p className="text-xs text-gray-500 mb-1">Open Interest</p>
-          <p className="text-base font-semibold font-mono text-white">{formatOI(current.openInterest)}</p>
+          <p className="text-sm sm:text-base font-semibold font-mono text-white truncate">{formatOI(current.openInterest)}</p>
           <p className="text-xs text-gray-600 mt-0.5">Coins</p>
         </div>
-        <div className="bg-gray-900 rounded-xl p-3 border border-gray-800">
+        <div className="bg-gray-900 rounded-xl p-2 sm:p-3 border border-gray-800 col-span-2 sm:col-span-1">
           <p className="text-xs text-gray-500 mb-1">Funding Rate</p>
-          <p className={`text-base font-semibold font-mono ${current.fundingRate > 0 ? 'text-green-400' : 'text-red-400'}`}>
+          <p className={`text-sm sm:text-base font-semibold font-mono truncate ${current.fundingRate > 0 ? 'text-green-400' : 'text-red-400'}`}>
             {(current.fundingRate * 100).toFixed(6)}%
           </p>
           <p className="text-xs text-gray-600 mt-0.5">Predicted</p>
@@ -454,15 +454,15 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
       </div>
 
       {/* Chart Interval Selector */}
-      <div className="flex items-center justify-between gap-3 bg-gray-900 rounded-xl p-3 border border-gray-800">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">Chart Interval:</span>
-          <div className="flex gap-1">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3 bg-gray-900 rounded-xl p-3 border border-gray-800">
+        <div className="flex flex-wrap items-center gap-1.5 w-full">
+          <span className="text-xs text-gray-500 whitespace-nowrap">Interval:</span>
+          <div className="flex flex-wrap gap-1">
             {CHART_INTERVALS.map(interval => (
               <button
                 key={interval.value}
                 onClick={() => setSelectedChartInterval(interval)}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${selectedChartInterval.value === interval.value
+                className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors ${selectedChartInterval.value === interval.value
                   ? 'bg-blue-600 text-white'
                   : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300'
                   }`}
@@ -472,7 +472,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
             ))}
           </div>
         </div>
-        <span className="text-xs text-gray-600">
+        <span className="text-xs text-gray-600 whitespace-nowrap hidden sm:inline">
           Window: {selectedChartInterval.window / 3600000}h · ~{displayData.length} points
         </span>
       </div>
@@ -504,8 +504,8 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
           </defs>
         </svg>
 
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <p className="text-xs text-gray-500 mb-3 font-medium">Open Interest Trend</p>
+        <div className="bg-gray-900 rounded-xl p-3 sm:p-4 border border-gray-800">
+          <p className="text-xs text-gray-500 mb-2 sm:mb-3 font-medium">Open Interest Trend</p>
           {displayData.length === 0 ? (
             <div className="h-[160px] flex items-center justify-center text-gray-600 text-sm">No data in this window</div>
           ) : (
@@ -518,8 +518,8 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                <XAxis dataKey="timestamp" tickFormatter={formatAxisTick} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={70} />
-                <YAxis tickFormatter={formatOI} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} domain={getDomain('openInterest')} width={55} />
+                <XAxis dataKey="timestamp" tickFormatter={formatAxisTick} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={50} />
+                <YAxis tickFormatter={formatOI} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} domain={getDomain('openInterest')} width={45} />
                 <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#3b82f6', strokeWidth: 1, strokeDasharray: '4 4' }} />
                 <Area type="monotone" dataKey="openInterest" stroke="#3b82f6" strokeWidth={1.5} fill="url(#oiGradChart)" dot={false} isAnimationActive={false} />
               </AreaChart>
@@ -527,8 +527,8 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
           )}
         </div>
 
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
-          <p className="text-xs text-gray-500 mb-3 font-medium">Funding Rate Trend</p>
+        <div className="bg-gray-900 rounded-xl p-3 sm:p-4 border border-gray-800">
+          <p className="text-xs text-gray-500 mb-2 sm:mb-3 font-medium">Funding Rate Trend</p>
           {displayData.length === 0 ? (
             <div className="h-[160px] flex items-center justify-center text-gray-600 text-sm">No data in this window</div>
           ) : (
@@ -541,8 +541,8 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                <XAxis dataKey="timestamp" tickFormatter={formatAxisTick} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={70} />
-                <YAxis tickFormatter={(v) => (v * 100).toFixed(4) + '%'} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} domain={getDomain('fundingRate')} width={72} />
+                <XAxis dataKey="timestamp" tickFormatter={formatAxisTick} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={50} />
+                <YAxis tickFormatter={(v) => (v * 100).toFixed(4) + '%'} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} domain={getDomain('fundingRate')} width={55} />
                 <ReferenceLine y={0} stroke="#374151" strokeDasharray="3 3" />
                 <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#f59e0b', strokeWidth: 1, strokeDasharray: '4 4' }} />
                 <Area type="monotone" dataKey="fundingRate" stroke="#f59e0b" strokeWidth={1.5} fill="url(#frGradChart)" dot={false} isAnimationActive={false} />
@@ -557,39 +557,39 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
         <button
           disabled={!hasMore || isLoadingMore}
           onClick={() => setViewOffset(v => v + panStep)}
-          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="flex items-center gap-0.5 text-xs text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         >
-          <ChevronLeft size={14} /> {panStepLabel} back
+          <ChevronLeft size={12} /> {panStepLabel} back
         </button>
         <button
           disabled={isLive}
           onClick={() => setViewOffset(v => Math.max(0, v - panStep))}
-          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="flex items-center gap-0.5 text-xs text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
         >
-          {panStepLabel} forward <ChevronRight size={14} />
+          {panStepLabel} forward <ChevronRight size={12} />
         </button>
       </div>
 
       {/* Snapshot Table Section */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-        <button onClick={() => setIsTableOpen(!isTableOpen)} className="w-full flex items-center justify-between p-4 hover:bg-gray-800/50 transition-colors">
+        <button onClick={() => setIsTableOpen(!isTableOpen)} className="w-full flex items-center justify-between p-3 sm:p-4 hover:bg-gray-800/50 transition-colors">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-white">Interval Snapshots</span>
-            {snapshots.length > 0 && <span className="text-xs text-gray-500">({snapshots.length} rows)</span>}
+            {snapshots.length > 0 && <span className="text-xs text-gray-500 hidden sm:inline">({snapshots.length} rows)</span>}
           </div>
-          {isTableOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+          {isTableOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>
 
         {isTableOpen && (
-          <div className="border-t border-gray-800 p-4 space-y-4">
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex-1 min-w-[140px]">
+          <div className="border-t border-gray-800 p-3 sm:p-4 space-y-3 sm:space-y-4">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="flex-1 min-w-0">
                 <label className="text-xs text-gray-500 mb-1 block">Period</label>
                 <select value={selectedPeriod} onChange={e => setSelectedPeriod(Number(e.target.value))} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600">
                   {PERIOD_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                 </select>
               </div>
-              <div className="flex-1 min-w-[140px]">
+              <div className="flex-1 min-w-0">
                 <label className="text-xs text-gray-500 mb-1 block">Interval</label>
                 <select value={selectedInterval} onChange={e => setSelectedInterval(Number(e.target.value))} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-600">
                   {INTERVAL_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
@@ -602,30 +602,30 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
               >
                 <RefreshCw size={14} className={isGeneratingSnapshots ? 'animate-spin' : ''} />
                 {isGeneratingSnapshots ? 'Loading...' : 'Generate'}
-              </button>
+                          </button>
               {snapshots.length > 0 && (
-                <button onClick={exportCSV} className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors">
-                  <Download size={14} /> CSV
+                <button onClick={exportCSV} className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg text-sm font-medium transition-colors">
+                  <Download size={14} /> <span className="hidden sm:inline">CSV</span>
                 </button>
               )}
             </div>
 
             {snapshots.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div className="overflow-x-auto -mx-3 sm:mx-0">
+                <table className="w-full text-sm min-w-[500px] sm:min-w-0">
                   <thead>
                     <tr className="border-b border-gray-800">
-                      <th className="text-left py-2 px-3 text-gray-500 font-medium">Time</th>
-                      <th className="text-right py-2 px-3 text-gray-500 font-medium">Open Interest</th>
-                      <th className="text-right py-2 px-3 text-gray-500 font-medium">OI Δ</th>
-                      <th className="text-right py-2 px-3 text-gray-500 font-medium">Funding Rate</th>
-                      <th className="text-right py-2 px-3 text-gray-500 font-medium">FR Δ</th>
+                      <th className="text-left py-2 px-3 text-gray-500 font-medium text-xs">Time</th>
+                      <th className="text-right py-2 px-3 text-gray-500 font-medium text-xs">Open Interest</th>
+                      <th className="text-right py-2 px-3 text-gray-500 font-medium text-xs">OI Δ</th>
+                      <th className="text-right py-2 px-3 text-gray-500 font-medium text-xs">Funding Rate</th>
+                      <th className="text-right py-2 px-3 text-gray-500 font-medium text-xs">FR Δ</th>
                     </tr>
                   </thead>
                   <tbody>
                     {snapshots.map((row, idx) => (
                       <tr key={idx} className="border-b border-gray-800/50 hover:bg-gray-800/30">
-                        <td className="py-2 px-3 text-gray-400 font-mono text-xs">
+                        <td className="py-2 px-3 text-gray-400 font-mono text-xs whitespace-nowrap">
                           {new Date(row.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}
                         </td>
                         <td className="py-2 px-3 text-right font-mono text-white">{formatOI(row.openInterest)}</td>
@@ -633,7 +633,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
                           }`}>
                           {row.oiChange === undefined ? '—' : row.oiChange > 0 ? `+${formatOI(row.oiChange)}` : formatOI(row.oiChange)}
                         </td>
-                        <td className={`py-2 px-3 text-right font-mono ${row.fundingRate > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        <td className={`py-2 px-3 text-right font-mono text-xs ${row.fundingRate > 0 ? 'text-green-400' : 'text-red-400'}`}>
                           {(row.fundingRate * 100).toFixed(6)}%
                         </td>
                         <td className={`py-2 px-3 text-right font-mono text-xs ${row.frChange === undefined ? 'text-gray-600' : row.frChange > 0 ? 'text-green-400' : row.frChange < 0 ? 'text-red-400' : 'text-gray-500'
