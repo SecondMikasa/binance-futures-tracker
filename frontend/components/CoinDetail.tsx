@@ -59,10 +59,10 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [earliestFetched, setEarliestFetched] = useState<number | null>(null);
-  
+
   // Chart interval selector
   const [selectedChartInterval, setSelectedChartInterval] = useState(CHART_INTERVALS[0]); // Default: 1 min
-  
+
   // Snapshot table state
   const [isTableOpen, setIsTableOpen] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState(PERIOD_OPTIONS[0].value);
@@ -99,16 +99,16 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
   // Sample data at the selected interval
   const displayData = useMemo(() => {
     const filtered = allData.filter(d => d.timestamp >= viewStart && d.timestamp <= viewEnd);
-    
+
     // If interval is 1 minute, return raw data
     if (selectedChartInterval.value === ONE_MINUTE) {
       return filtered;
     }
-    
+
     // Otherwise, sample at the selected interval
     const sampled: MarketDataPoint[] = [];
     const intervalMs = selectedChartInterval.value;
-    
+
     // Create time buckets
     const buckets = new Map<number, MarketDataPoint[]>();
     for (const point of filtered) {
@@ -118,7 +118,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
       }
       buckets.get(bucketKey)!.push(point);
     }
-    
+
     // Average each bucket
     for (const [bucketTime, points] of buckets.entries()) {
       const avg = {
@@ -129,7 +129,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
       };
       sampled.push(avg);
     }
-    
+
     return sampled.sort((a, b) => a.timestamp - b.timestamp);
   }, [allData, viewStart, viewEnd, selectedChartInterval]);
 
@@ -211,8 +211,41 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
 
   const snapToLive = () => setViewOffset(0);
 
-  const formatTime = (ts: number) =>
-    new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  // Full format for tooltip and header range display
+  const formatDateTime = (ts: number) => {
+    const d = new Date(ts);
+    const today = new Date();
+    const isToday =
+      d.getFullYear() === today.getFullYear() &&
+      d.getMonth() === today.getMonth() &&
+      d.getDate() === today.getDate();
+    if (isToday) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+    return (
+      d.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+      ' ' +
+      d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+    );
+  };
+
+  // For X-axis ticks: show date only on first tick of a new day
+  const seenDays = new Set<string>();
+  const formatAxisTick = (ts: number) => {
+    const d = new Date(ts);
+    const today = new Date();
+    const isToday =
+      d.getFullYear() === today.getFullYear() &&
+      d.getMonth() === today.getMonth() &&
+      d.getDate() === today.getDate();
+
+    // Show "Apr 7" only at midnight boundary (within 5 min window)
+    const minuteOfDay = d.getHours() * 60 + d.getMinutes();
+    if (!isToday && minuteOfDay < 5) {
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  };
 
   const formatOI = (val: number) => {
     if (val >= 1_000_000) return (val / 1_000_000).toFixed(3) + 'M';
@@ -235,7 +268,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
     return (
       <div className="bg-gray-900/95 border border-gray-700 rounded-lg p-3 shadow-xl backdrop-blur text-xs">
         <p className="text-gray-400 mb-2 flex items-center gap-1">
-          <Clock size={10} /> {formatTime(d.timestamp)}
+          <Clock size={10} /> {formatDateTime(d.timestamp)}
         </p>
         {payload.map((p: any) => (
           <div key={p.name} className="flex justify-between gap-4">
@@ -265,7 +298,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
       if (earliestAvailable > startTime) {
         console.log(`[Snapshots] Fetching missing data from ${new Date(startTime)} to ${new Date(endTime)}`);
         const rangeData = await dbService.getMarketDataRange(symbol, startTime, endTime);
-        
+
         const combined = [...rangeData, ...allData];
         const seen = new Set<number>();
         dataToUse = combined
@@ -290,7 +323,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
       }
 
       const periodData = dataToUse.filter(d => d.timestamp >= startTime && d.timestamp <= endTime);
-      
+
       if (periodData.length === 0) {
         setSnapshots([]);
         return;
@@ -363,8 +396,8 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
 
   // Pan step is 1/4 of the window
   const panStep = selectedChartInterval.window / 4;
-  const panStepLabel = selectedChartInterval.window < 4 * 60 * 60 * 1000 
-    ? `${Math.round(panStep / 60000)} min` 
+  const panStepLabel = selectedChartInterval.window < 4 * 60 * 60 * 1000
+    ? `${Math.round(panStep / 60000)} min`
     : `${Math.round(panStep / 3600000)} hr`;
 
   return (
@@ -390,7 +423,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
         </div>
         <span className="text-xs text-gray-500 flex items-center gap-1">
           <Clock size={11} />
-          {formatTime(viewStart)} – {formatTime(viewEnd)}
+          {formatDateTime(viewStart)} – {formatDateTime(viewEnd)}
         </span>
       </div>
 
@@ -429,11 +462,10 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
               <button
                 key={interval.value}
                 onClick={() => setSelectedChartInterval(interval)}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-                  selectedChartInterval.value === interval.value
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300'
-                }`}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${selectedChartInterval.value === interval.value
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-300'
+                  }`}
               >
                 {interval.label}
               </button>
@@ -486,7 +518,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                <XAxis dataKey="timestamp" tickFormatter={formatTime} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={50} />
+                <XAxis dataKey="timestamp" tickFormatter={formatAxisTick} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={70} />
                 <YAxis tickFormatter={formatOI} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} domain={getDomain('openInterest')} width={55} />
                 <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#3b82f6', strokeWidth: 1, strokeDasharray: '4 4' }} />
                 <Area type="monotone" dataKey="openInterest" stroke="#3b82f6" strokeWidth={1.5} fill="url(#oiGradChart)" dot={false} isAnimationActive={false} />
@@ -509,7 +541,7 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                <XAxis dataKey="timestamp" tickFormatter={formatTime} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={50} />
+                <XAxis dataKey="timestamp" tickFormatter={formatAxisTick} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} minTickGap={70} />
                 <YAxis tickFormatter={(v) => (v * 100).toFixed(4) + '%'} tick={{ fill: '#6b7280', fontSize: 10 }} axisLine={false} tickLine={false} domain={getDomain('fundingRate')} width={72} />
                 <ReferenceLine y={0} stroke="#374151" strokeDasharray="3 3" />
                 <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#f59e0b', strokeWidth: 1, strokeDasharray: '4 4' }} />
@@ -597,17 +629,15 @@ export const CoinDetail: React.FC<CoinDetailProps> = ({ symbol, data }) => {
                           {new Date(row.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}
                         </td>
                         <td className="py-2 px-3 text-right font-mono text-white">{formatOI(row.openInterest)}</td>
-                        <td className={`py-2 px-3 text-right font-mono text-xs ${
-                          row.oiChange === undefined ? 'text-gray-600' : row.oiChange > 0 ? 'text-green-400' : row.oiChange < 0 ? 'text-red-400' : 'text-gray-500'
-                        }`}>
+                        <td className={`py-2 px-3 text-right font-mono text-xs ${row.oiChange === undefined ? 'text-gray-600' : row.oiChange > 0 ? 'text-green-400' : row.oiChange < 0 ? 'text-red-400' : 'text-gray-500'
+                          }`}>
                           {row.oiChange === undefined ? '—' : row.oiChange > 0 ? `+${formatOI(row.oiChange)}` : formatOI(row.oiChange)}
                         </td>
                         <td className={`py-2 px-3 text-right font-mono ${row.fundingRate > 0 ? 'text-green-400' : 'text-red-400'}`}>
                           {(row.fundingRate * 100).toFixed(6)}%
                         </td>
-                        <td className={`py-2 px-3 text-right font-mono text-xs ${
-                          row.frChange === undefined ? 'text-gray-600' : row.frChange > 0 ? 'text-green-400' : row.frChange < 0 ? 'text-red-400' : 'text-gray-500'
-                        }`}>
+                        <td className={`py-2 px-3 text-right font-mono text-xs ${row.frChange === undefined ? 'text-gray-600' : row.frChange > 0 ? 'text-green-400' : row.frChange < 0 ? 'text-red-400' : 'text-gray-500'
+                          }`}>
                           {row.frChange === undefined ? '—' : row.frChange > 0 ? `+${(row.frChange * 100).toFixed(6)}%` : `${(row.frChange * 100).toFixed(6)}%`}
                         </td>
                       </tr>
